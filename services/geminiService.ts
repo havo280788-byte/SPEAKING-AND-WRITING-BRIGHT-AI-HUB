@@ -16,28 +16,28 @@ export interface ModelConfig {
 // Available models for text generation (in fallback order)
 export const TEXT_MODELS: ModelConfig[] = [
   {
-    id: "gemini-2.5-flash-preview-05-20",
-    name: "Gemini 2.5 Flash",
-    description: "Nhanh & Hiệu quả",
-    icon: "⚡",
+    id: "gemini-3-pro-preview",
+    name: "Gemini 3 Pro",
+    description: "Chất lượng cao nhất",
+    icon: "🎯",
     isDefault: true
   },
   {
-    id: "gemini-2.5-pro-preview-05-06",
-    name: "Gemini 2.5 Pro",
-    description: "Chất lượng cao",
-    icon: "🎯"
+    id: "gemini-3-flash-preview",
+    name: "Gemini 3 Flash",
+    description: "Nhanh & Mạnh mẽ",
+    icon: "⚡"
   },
   {
-    id: "gemini-2.0-flash",
-    name: "Gemini 2.0 Flash",
+    id: "gemini-2.5-flash",
+    name: "Gemini 2.5 Flash",
     description: "Ổn định & An toàn",
     icon: "🔒"
   }
 ];
 
 // TTS Model (separate from text models)
-const TTS_MODEL = "gemini-2.5-flash-preview-tts";
+const TTS_MODEL = "gemini-2.0-flash";
 
 // ============================================
 // STATE MANAGEMENT
@@ -115,7 +115,7 @@ async function callWithFallback<T>(
   options: FallbackOptions = {}
 ): Promise<T> {
   const { startFromSelected = true } = options;
-  
+
   // Build model order: start from selected, then try others
   let modelOrder: string[];
   if (startFromSelected) {
@@ -138,21 +138,21 @@ async function callWithFallback<T>(
     } catch (error: any) {
       console.warn(`[GeminiService] Model ${modelId} failed:`, error.message);
       lastError = error;
-      
+
       // Check if error is retriable (rate limit, quota, server error)
-      const isRetriable = 
+      const isRetriable =
         error.message?.includes('429') || // Rate limit
         error.message?.includes('503') || // Service unavailable
         error.message?.includes('500') || // Server error
         error.message?.includes('quota') ||
         error.message?.includes('overloaded') ||
         error.message?.includes('capacity');
-      
+
       if (!isRetriable) {
         // Non-retriable error (e.g., invalid API key, bad request)
         throw error;
       }
-      
+
       // Continue to next model
       console.log(`[GeminiService] Falling back to next model...`);
     }
@@ -179,7 +179,7 @@ export const generateSpeech = async (text: string): Promise<string> => {
         }
       }
     });
-    
+
     const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
     if (!base64Audio) throw new Error("No audio generated");
     return base64Audio;
@@ -198,7 +198,7 @@ export const analyzeWriting = async (
   taskType: "IELTS" | "TOEIC" | "General" = "General"
 ): Promise<AIResponse> => {
   const ai = getClient();
-  
+
   const prompt = `
     Act as an expert English teacher and examiner for ${taskType}.
     Analyze the following text provided by a student.
@@ -292,17 +292,17 @@ export const interactWithExaminer = async (
   if (!userAudioBase64) {
     // Start of session
     if (specificQuestion) {
-        prompt = `Start the interview. Introduce yourself briefly (1 sentence) and ask exactly this question: "${specificQuestion}". Return JSON: { "transcription": "", "response": "Your intro and question" }`;
+      prompt = `Start the interview. Introduce yourself briefly (1 sentence) and ask exactly this question: "${specificQuestion}". Return JSON: { "transcription": "", "response": "Your intro and question" }`;
     } else {
-        prompt = `Start the interview. Introduce yourself briefly and ask the first question about "${topic}". Return JSON: { "transcription": "", "response": "Your intro and question" }`;
+      prompt = `Start the interview. Introduce yourself briefly and ask the first question about "${topic}". Return JSON: { "transcription": "", "response": "Your intro and question" }`;
     }
     parts.push({ text: prompt });
   } else {
     // User responded
     const transcriptionInstruction = "1. Transcribe the user's audio accurately.";
-    
+
     if (isFinish) {
-        prompt = `
+      prompt = `
           The user just answered the final question via audio.
           ${transcriptionInstruction}
           2. Generate a brief polite closing statement (e.g. "Thank you for your answers. The test is now finished.").
@@ -311,7 +311,7 @@ export const interactWithExaminer = async (
           Return JSON: { "transcription": "exact words spoken by student", "response": "Closing statement" }
         `;
     } else if (specificQuestion) {
-        prompt = `
+      prompt = `
           The user just answered via audio. 
           ${transcriptionInstruction}
           2. Generate a brief, natural response to acknowledge their answer (e.g., "That's interesting," "I see").
@@ -321,7 +321,7 @@ export const interactWithExaminer = async (
           Return JSON: { "transcription": "exact words spoken by student", "response": "Your reaction + next question" }
         `;
     } else {
-        prompt = `
+      prompt = `
           The user just answered via audio. 
           ${transcriptionInstruction}
           2. Generate a brief, natural response to acknowledge their answer (e.g., "That's interesting," "I see").
@@ -331,7 +331,7 @@ export const interactWithExaminer = async (
           Return JSON: { "transcription": "exact words spoken by student", "response": "Your reaction + next question" }
         `;
     }
-    
+
     parts.push({ inlineData: { mimeType: "audio/webm; codecs=opus", data: userAudioBase64 } });
     parts.push({ text: prompt });
   }
@@ -529,7 +529,7 @@ export const analyzePronunciation = async (
         parts: [
           {
             inlineData: {
-              mimeType: "audio/webm; codecs=opus", 
+              mimeType: "audio/webm; codecs=opus",
               data: audioBase64
             }
           },
