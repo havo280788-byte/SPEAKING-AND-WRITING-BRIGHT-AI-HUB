@@ -1,30 +1,176 @@
 import { GoogleGenAI, Modality } from "@google/genai";
 import { AIResponse, ChatMessage } from "../types";
 
-// Allow dynamic API key injection
-let appApiKey = process.env.API_KEY || "";
+// ============================================
+// MODEL CONFIGURATION WITH FALLBACK
+// ============================================
+
+export interface ModelConfig {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  isDefault?: boolean;
+}
+
+// Available models for text generation (in fallback order)
+export const TEXT_MODELS: ModelConfig[] = [
+  {
+    id: "gemini-2.5-flash-preview-05-20",
+    name: "Gemini 2.5 Flash",
+    description: "Nhanh & Hiệu quả",
+    icon: "⚡",
+    isDefault: true
+  },
+  {
+    id: "gemini-2.5-pro-preview-05-06",
+    name: "Gemini 2.5 Pro",
+    description: "Chất lượng cao",
+    icon: "🎯"
+  },
+  {
+    id: "gemini-2.0-flash",
+    name: "Gemini 2.0 Flash",
+    description: "Ổn định & An toàn",
+    icon: "🔒"
+  }
+];
+
+// TTS Model (separate from text models)
+const TTS_MODEL = "gemini-2.5-flash-preview-tts";
+
+// ============================================
+// STATE MANAGEMENT
+// ============================================
+
+let appApiKey = "";
+let selectedModelId = TEXT_MODELS[0].id;
+
+// Load from localStorage on init
+if (typeof window !== 'undefined') {
+  const storedKey = localStorage.getItem('lingua_api_key');
+  const storedModel = localStorage.getItem('lingua_selected_model');
+  if (storedKey) appApiKey = storedKey;
+  if (storedModel) selectedModelId = storedModel;
+}
 
 export const setApiKey = (key: string) => {
   appApiKey = key;
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('lingua_api_key', key);
+  }
 };
+
+export const getApiKey = (): string => {
+  return appApiKey;
+};
+
+export const setSelectedModel = (modelId: string) => {
+  selectedModelId = modelId;
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('lingua_selected_model', modelId);
+  }
+};
+
+export const getSelectedModel = (): string => {
+  return selectedModelId;
+};
+
+export const getSelectedModelConfig = (): ModelConfig => {
+  return TEXT_MODELS.find(m => m.id === selectedModelId) || TEXT_MODELS[0];
+};
+
+// ============================================
+// API CLIENT
+// ============================================
 
 const getClient = () => {
   if (!appApiKey) {
-    throw new Error("API Key is missing. Please enter your Gemini API Key in the login screen.");
+    throw new Error("API Key is missing. Please enter your Gemini API Key in Settings.");
   }
   return new GoogleGenAI({ apiKey: appApiKey });
-}
+};
 
 // Helper to clean JSON string if it comes with markdown blocks
 const cleanJsonString = (str: string): string => {
   return str.replace(/```json\n?|```/g, "").trim();
 };
 
+// ============================================
+// FALLBACK MECHANISM
+// ============================================
+
+interface FallbackOptions {
+  startFromSelected?: boolean; // Start from user-selected model (default: true)
+}
+
+/**
+ * Call API with automatic fallback to next model on failure
+ * @param apiCall - Function that takes model ID and returns API response
+ * @param options - Fallback options
+ * @returns API response from successful model
+ */
+async function callWithFallback<T>(
+  apiCall: (modelId: string) => Promise<T>,
+  options: FallbackOptions = {}
+): Promise<T> {
+  const { startFromSelected = true } = options;
+  
+  // Build model order: start from selected, then try others
+  let modelOrder: string[];
+  if (startFromSelected) {
+    const selectedIndex = TEXT_MODELS.findIndex(m => m.id === selectedModelId);
+    const before = TEXT_MODELS.slice(0, selectedIndex);
+    const after = TEXT_MODELS.slice(selectedIndex);
+    modelOrder = [...after, ...before].map(m => m.id);
+  } else {
+    modelOrder = TEXT_MODELS.map(m => m.id);
+  }
+
+  let lastError: Error | null = null;
+
+  for (const modelId of modelOrder) {
+    try {
+      console.log(`[GeminiService] Trying model: ${modelId}`);
+      const result = await apiCall(modelId);
+      console.log(`[GeminiService] Success with model: ${modelId}`);
+      return result;
+    } catch (error: any) {
+      console.warn(`[GeminiService] Model ${modelId} failed:`, error.message);
+      lastError = error;
+      
+      // Check if error is retriable (rate limit, quota, server error)
+      const isRetriable = 
+        error.message?.includes('429') || // Rate limit
+        error.message?.includes('503') || // Service unavailable
+        error.message?.includes('500') || // Server error
+        error.message?.includes('quota') ||
+        error.message?.includes('overloaded') ||
+        error.message?.includes('capacity');
+      
+      if (!isRetriable) {
+        // Non-retriable error (e.g., invalid API key, bad request)
+        throw error;
+      }
+      
+      // Continue to next model
+      console.log(`[GeminiService] Falling back to next model...`);
+    }
+  }
+
+  // All models failed
+  throw lastError || new Error("All models failed. Please try again later.");
+}
+
+// ============================================
+// TEXT-TO-SPEECH
+// ============================================
+
 export const generateSpeech = async (text: string): Promise<string> => {
   const ai = getClient();
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-tts",
+      model: TTS_MODEL,
       contents: { parts: [{ text }] },
       config: {
         responseModalities: [Modality.AUDIO],
@@ -42,6 +188,10 @@ export const generateSpeech = async (text: string): Promise<string> => {
     return ""; // Return empty string if TTS fails, so chat can continue with text only
   }
 };
+
+// ============================================
+// WRITING ANALYSIS
+// ============================================
 
 export const analyzeWriting = async (
   text: string,
@@ -84,9 +234,9 @@ export const analyzeWriting = async (
     }
   `;
 
-  try {
+  return callWithFallback(async (modelId) => {
     const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: modelId,
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -95,13 +245,13 @@ export const analyzeWriting = async (
 
     const jsonText = cleanJsonString(response.text || "{}");
     return JSON.parse(jsonText) as AIResponse;
-  } catch (error) {
-    console.error("Gemini Writing Error:", error);
-    throw new Error("Unable to analyze writing. Please check your network or try again.");
-  }
+  });
 };
 
-// --- Single Turn Analysis (Old - Kept for reference or simple mode) ---
+// ============================================
+// SPEAKING ANALYSIS (SINGLE TURN)
+// ============================================
+
 export const analyzeSpeaking = async (
   audioBase64: string,
   topic: string = "General English"
@@ -110,7 +260,10 @@ export const analyzeSpeaking = async (
   return gradeSpeakingSession([{ role: 'user', text: '(Audio Transcript Placeholder)' }], topic, audioBase64);
 };
 
-// --- 1. Interaction Logic (Turn-by-Turn) ---
+// ============================================
+// SPEAKING INTERACTION (TURN-BY-TURN)
+// ============================================
+
 export const interactWithExaminer = async (
   history: ChatMessage[],
   topic: string,
@@ -183,9 +336,9 @@ export const interactWithExaminer = async (
     parts.push({ text: prompt });
   }
 
-  try {
+  const result = await callWithFallback(async (modelId) => {
     const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: modelId,
       contents: {
         parts: parts
       },
@@ -196,30 +349,30 @@ export const interactWithExaminer = async (
     });
 
     const jsonText = cleanJsonString(response.text || "{}");
-    const result = JSON.parse(jsonText);
-    
-    // Generate TTS Audio for the response
-    let aiAudioBase64 = "";
-    if (result.response) {
-      aiAudioBase64 = await generateSpeech(result.response);
-    }
+    return JSON.parse(jsonText);
+  });
 
-    return {
-      userTranscription: result.transcription || "",
-      aiResponse: result.response,
-      aiAudioBase64
-    };
-  } catch (error) {
-    console.error("Gemini Interaction Error:", error);
-    throw new Error("Connection error. Please try again.");
+  // Generate TTS Audio for the response
+  let aiAudioBase64 = "";
+  if (result.response) {
+    aiAudioBase64 = await generateSpeech(result.response);
   }
+
+  return {
+    userTranscription: result.transcription || "",
+    aiResponse: result.response,
+    aiAudioBase64
+  };
 };
 
-// --- 2. Final Grading Logic (After 5 turns) ---
+// ============================================
+// SPEAKING SESSION GRADING
+// ============================================
+
 export const gradeSpeakingSession = async (
   fullHistory: ChatMessage[],
   topic: string,
-  lastAudioBase64?: string // Optional: pass the last audio chunk if needed for specific analysis, but text is primary here
+  lastAudioBase64?: string
 ): Promise<AIResponse> => {
   const ai = getClient();
 
@@ -289,9 +442,9 @@ export const gradeSpeakingSession = async (
   }
   contents.parts.push({ text: prompt });
 
-  try {
+  return callWithFallback(async (modelId) => {
     const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: modelId,
       contents: contents,
       config: {
         responseMimeType: "application/json"
@@ -300,11 +453,12 @@ export const gradeSpeakingSession = async (
 
     const jsonText = cleanJsonString(response.text || "{}");
     return JSON.parse(jsonText) as AIResponse;
-  } catch (error) {
-    console.error("Gemini Grading Error:", error);
-    throw new Error("Unable to grade session.");
-  }
+  });
 };
+
+// ============================================
+// PRONUNCIATION ANALYSIS
+// ============================================
 
 export const analyzePronunciation = async (
   audioBase64: string,
@@ -368,9 +522,9 @@ export const analyzePronunciation = async (
     }
   `;
 
-  try {
+  return callWithFallback(async (modelId) => {
     const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: modelId,
       contents: {
         parts: [
           {
@@ -389,8 +543,5 @@ export const analyzePronunciation = async (
 
     const jsonText = cleanJsonString(response.text || "{}");
     return JSON.parse(jsonText) as AIResponse;
-  } catch (error) {
-    console.error("Gemini Pronunciation Error:", error);
-    throw new Error("Unable to analyze pronunciation.");
-  }
+  });
 };
