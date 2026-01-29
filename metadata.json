@@ -1,0 +1,7 @@
+{
+  "name": "LinguaAI - Smart English Learning",
+  "description": "IELTS/TOEIC Speaking & Writing practice app integrated with Gemini AI for instant feedback.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
